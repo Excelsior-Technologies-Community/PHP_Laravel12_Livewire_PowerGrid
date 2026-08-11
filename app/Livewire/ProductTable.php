@@ -3,8 +3,9 @@
 namespace App\Livewire;
 
 use App\Models\Product;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
-use PowerComponents\LivewirePowerGrid\Button;
+use Livewire\Attributes\On;
 use PowerComponents\LivewirePowerGrid\Column;
 use PowerComponents\LivewirePowerGrid\Facades\Filter;
 use PowerComponents\LivewirePowerGrid\Facades\PowerGrid;
@@ -15,21 +16,26 @@ final class ProductTable extends PowerGridComponent
 {
     public string $tableName = 'products';
 
+    public string $stockStatus = '';
+
     public function setUp(): array
     {
         return [
             PowerGrid::header()
                 ->showSearchInput()
                 ->showToggleColumns(),
+
             PowerGrid::footer()
                 ->showPerPage(10, [5, 10, 25, 50])
                 ->showRecordCount(),
         ];
     }
 
-    public function datasource(): ?\Illuminate\Database\Query\Builder
+    public function datasource(): ?Builder
     {
-        return Product::query()->toBase(); // Add toBase() to convert to Query Builder
+        $query = Product::query();
+
+        return $query->toBase();
     }
 
     public function relationSearch(): array
@@ -43,16 +49,46 @@ final class ProductTable extends PowerGridComponent
             ->add('id')
             ->add('name')
             ->add('description')
+
             ->add('price', function ($product) {
                 return '$ ' . number_format($product->price, 2);
             })
+
             ->add('stock')
-            ->add('category')
-            ->add('is_active', function ($product) {
-                return $product->is_active ? '✅ Active' : '❌ Inactive';
+
+            ->add('stock_status', function ($product) {
+                if ($product->stock == 0) {
+                    return '⚫ Out of Stock';
+                }
+
+                if ($product->stock <= 2) {
+                    return '🔴 Critical';
+                }
+
+                if ($product->stock <= 10) {
+                    return '🟡 Low Stock';
+                }
+
+                return '🟢 In Stock';
             })
+
+            ->add('category')
+
+            ->add('is_active', function ($product) {
+                return $product->is_active
+                    ? '✅ Active'
+                    : '❌ Inactive';
+            })
+
             ->add('created_at_formatted', function ($product) {
-                return Carbon::parse($product->created_at)->format('d/m/Y');
+                return Carbon::parse($product->created_at)
+                    ->format('d/m/Y');
+            })
+
+            ->add('actions', function ($product) {
+                return view('livewire.product-actions', [
+                    'row' => $product,
+                ])->render();
             });
     }
 
@@ -78,6 +114,9 @@ final class ProductTable extends PowerGridComponent
                 ->searchable()
                 ->sortable(),
 
+            Column::make('Stock Status', 'stock_status')
+                ->searchable(),
+
             Column::make('Category', 'category')
                 ->searchable()
                 ->sortable(),
@@ -88,7 +127,8 @@ final class ProductTable extends PowerGridComponent
             Column::make('Created At', 'created_at_formatted')
                 ->sortable(),
 
-            Column::action('Actions'),
+            Column::make('Actions', 'actions')
+                ->visibleInExport(false),
         ];
     }
 
@@ -96,43 +136,42 @@ final class ProductTable extends PowerGridComponent
     {
         return [
             Filter::inputText('name'),
+
             Filter::number('price', 'price'),
+
             Filter::inputText('category'),
+
             Filter::boolean('is_active'),
+
             Filter::datepicker('created_at'),
         ];
     }
 
-    public function actions($product): array // Remove type hint
-    {
-        return [
-            Button::add('edit')
-                ->slot('Edit')
-                ->class('pg-btn-white dark:ring-pg-primary-600 dark:border-pg-primary-600 dark:hover:bg-pg-primary-700 dark:ring-offset-pg-primary-800 dark:text-pg-primary-300 dark:bg-pg-primary-700')
-                ->dispatch('editProduct', [$product->id]),
-
-            Button::add('delete')
-                ->slot('Delete')
-                ->class('pg-btn-white dark:ring-pg-primary-600 dark:border-pg-primary-600 dark:hover:bg-pg-primary-700 dark:ring-offset-pg-primary-800 dark:text-pg-primary-300 dark:bg-pg-primary-700')
-                ->dispatch('deleteProduct', [$product->id]),
-        ];
-    }
-    // Add this method inside the ProductTable class
-    public function deleteProduct(int $productId)
+    #[On('toggleProductStatus')]
+    public function toggleProductStatus(int $productId): void
     {
         try {
             $product = Product::findOrFail($productId);
-            $product->delete();
 
-            $this->dispatch('toast', [
-                'type' => 'success',
-                'message' => 'Product deleted successfully!'
-            ]);
-        } catch (\Exception $e) {
-            $this->dispatch('toast', [
-                'type' => 'error',
-                'message' => 'Error deleting product: ' . $e->getMessage()
-            ]);
+            $product->is_active = ! $product->is_active;
+
+            $product->save();
+
+            $status = $product->is_active
+                ? 'activated'
+                : 'deactivated';
+
+            $this->dispatch(
+                'toast',
+                type: 'success',
+                message: "Product {$status} successfully!"
+            );
+        } catch (\Throwable $e) {
+            $this->dispatch(
+                'toast',
+                type: 'error',
+                message: 'Unable to update product status.'
+            );
         }
     }
 }
